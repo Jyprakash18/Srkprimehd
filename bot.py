@@ -363,6 +363,13 @@ async def check_expiries_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    # Python 3.12 / 3.14 event loop compatibility fix
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # Add Command Handlers
@@ -376,13 +383,11 @@ def main():
     if app.job_queue:
         app.job_queue.run_repeating(
             check_expiries_job,
-            interval=3600,  # Runs every hour
-            first=30,  # First run after 30 seconds
+            interval=3600,  # Har 1 ghante me check karega
+            first=30,  # Start hone ke 30 sec baad pehli run
         )
     else:
-        logger.warning(
-            "JobQueue is not available. Install with: pip install 'python-telegram-bot[job-queue]'"
-        )
+        logger.warning("JobQueue is not initialized.")
 
     logger.info("Bot is starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
