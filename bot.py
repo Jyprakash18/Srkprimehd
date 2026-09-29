@@ -1,6 +1,9 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import logging
+import os
+import threading
 from config import ADMIN_USER_IDS, BOT_TOKEN, LOG_CHANNEL_ID, PREMIUM_CHANNEL_ID
 import database
 from database import (
@@ -25,6 +28,30 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+# Httpx logs ko mute karein taaki Bot Token logs me leak na ho
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+# --- Dummy Web Server (Render Free Port Binding) ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is alive and running!")
+
+    def log_message(self, format, *args):
+        return  # Server ke access logs band rakhein
+
+
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    logger.info(f"Health-check dummy server listening on port {port}")
+    server.serve_forever()
+
 
 # --- Helper Functions ---
 
@@ -58,8 +85,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = user.username or user.first_name
 
     logger.info(f"User {user_id} started the bot.")
-
-    # Ensure user exists in DB
     db_user = create_user_if_not_exists(user_id, username)
 
     if not db_user:
@@ -68,7 +93,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Check Premium Status
     is_active = check_premium_status(user_id)
 
     if is_active:
@@ -80,7 +104,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⏳ Remaining: {days_left} days\n\n"
             "Click the button below to join the premium channel."
         )
-
         channel_link = get_premium_channel_link()
         keyboard = []
         if channel_link:
@@ -157,32 +180,24 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = int(context.args[0])
         days = int(context.args[1])
     except ValueError:
-        await update.message.reply_text(
-            "Invalid format. USER_ID and DAYS must be numbers."
-        )
+        await update.message.reply_text("Invalid format. USER_ID and DAYS must be numbers.")
         return
 
     if days <= 0:
         await update.message.reply_text("❌ DAYS must be greater than 0.")
         return
 
-    # Ensure target user exists in DB
     target_user = create_user_if_not_exists(target_id, "Unknown")
     if not target_user:
-        await update.message.reply_text(
-            "⚠️ Could not create/find target user in DB."
-        )
+        await update.message.reply_text("⚠️ Could not create/find target user in DB.")
         return
 
-    # Check if they already have active premium to extend it
     current_expiry = target_user.get("premium", {}).get("expiry_date")
     now = datetime.now(timezone.utc)
 
-    # Convert naive Mongo datetime to UTC BEFORE comparison
     if current_expiry:
         if current_expiry.tzinfo is None:
             current_expiry = current_expiry.replace(tzinfo=timezone.utc)
-
         if current_expiry > now:
             new_expiry = current_expiry + timedelta(days=days)
         else:
@@ -190,7 +205,6 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         new_expiry = now + timedelta(days=days)
 
-    # Update DB
     result = update_premium_status(
         target_id,
         is_premium=True,
@@ -200,19 +214,14 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if result:
-        # Send message to user
-        try:
-            channel_link = get_premium_channel_link()
-            buttons = []
-            if channel_link:
-                buttons.append(
-                    [
-                        InlineKeyboardButton(
-                            "Join Premium Channel", url=channel_link
-                        )
-                    ]
-                )
+        channel_link = get_premium_channel_link()
+        buttons = []
+        if channel_link:
+            buttons.append(
+                [InlineKeyboardButton("Join Premium Channel", url=channel_link)]
+            )
 
+        try:
             await context.bot.send_message(
                 chat_id=target_id,
                 text=(
@@ -222,33 +231,32 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "Please join the premium channel using the link below."
                 ),
                 parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(buttons)
-                if buttons
-                else None,
+                reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
             )
         except Exception as e:
-            logger.warning(f"Could not send message to user {target_id}: {e}")
+            logger.warning(f"Could not send PM to {target_id}: {e}")
 
-        # Log to Admin Channel
-        log_text = (
-            f"✅ <b>Payment Verified</b>\n"
-            f"Admin: <code>{user.id}</code>\n"
-            f"User ID: <code>{target_id}</code>\n"
-            f"Duration: {days} days\n"
-            f"New Expiry: {format_date(new_expiry)}"
-        )
+        # Log Channel update
         try:
             await context.bot.send_message(
-                chat_id=LOG_CHANNEL_ID, text=log_text, parse_mode="HTML"
+                chat_id=LOG_CHANNEL_ID,
+                text=(
+                    f"✅ <b>Payment Verified</b>\n"
+                    f"Admin: <code>{user.id}</code>\n"
+                    f"User ID: <code>{target_id}</code>\n"
+                    f"Duration: {days} days\n"
+                    f"New Expiry: {format_date(new_expiry)}"
+                ),
+                parse_mode="HTML",
             )
         except Exception as e:
-            logger.error(f"Failed to post to LOG_CHANNEL: {e}")
+            logger.error(f"LOG_CHANNEL failed: {e}")
 
         await update.message.reply_text(
             f"✅ Verified for ID {target_id}.\nExpiry: {format_date(new_expiry)}"
         )
     else:
-        await update.message.reply_text("⚠️ Failed to update user in database.")
+        await update.message.reply_text("⚠️ Failed to update database.")
 
 
 async def revoke(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -262,16 +270,12 @@ async def revoke(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        # Fixed syntax error
         target_id = int(context.args[0])
     except ValueError:
         await update.message.reply_text("Invalid User ID.")
         return
 
-    result = update_premium_status(
-        target_id, is_premium=False, expiry_date=None, trial=False
-    )
-
+    result = update_premium_status(target_id, is_premium=False, expiry_date=None, trial=False)
     if result:
         await update.message.reply_text(f"❌ Revoked premium for ID {target_id}.")
         try:
@@ -279,8 +283,8 @@ async def revoke(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=LOG_CHANNEL_ID,
                 text=f"❌ Premium Revoked for User ID: {target_id}",
             )
-        except Exception as e:
-            logger.error(f"Failed to post revoke log: {e}")
+        except Exception:
+            pass
     else:
         await update.message.reply_text("⚠️ User not found or no changes made.")
 
@@ -296,7 +300,6 @@ async def status_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        # Fixed syntax error
         target_id = int(context.args[0])
     except ValueError:
         await update.message.reply_text("Invalid User ID.")
@@ -321,27 +324,21 @@ async def status_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="HTML")
 
 
-# --- Background Task for Expiry ---
+# --- Background Auto-Expiry Task ---
 
 
 async def check_expiries_job(context: ContextTypes.DEFAULT_TYPE):
-    """Periodically checks all active users and marks expired ones as inactive."""
     logger.info("Running premium expiry check...")
     try:
-        # database module explicitly referenced
         users = database.collection.find({"premium.is_premium": True})
         now = datetime.now(timezone.utc)
-
         for user in users:
             user_id = user.get("id")
             expiry = user.get("premium", {}).get("expiry_date")
-
             if not expiry:
                 continue
-
             if expiry.tzinfo is None:
                 expiry = expiry.replace(tzinfo=timezone.utc)
-
             if now > expiry:
                 logger.info(f"Expiring premium for user {user_id}")
                 update_premium_status(user_id, is_premium=False)
@@ -353,8 +350,6 @@ async def check_expiries_job(context: ContextTypes.DEFAULT_TYPE):
                     )
                 except Exception:
                     pass
-
-        logger.info("Premium expiry check completed.")
     except Exception as e:
         logger.error(f"Error in check_expiries_job: {e}")
 
@@ -363,33 +358,30 @@ async def check_expiries_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    # Python 3.12 / 3.14 event loop compatibility fix
+    # 1. Start Background HTTP Server for Render Free Tier Port Binding
+    web_thread = threading.Thread(target=run_dummy_server, daemon=True)
+    web_thread.start()
+
+    # 2. Setup Asyncio Event Loop
     try:
         loop = asyncio.get_event_loop()
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
+    # 3. Build Bot Application
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Add Command Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("verify", verify))
     app.add_handler(CommandHandler("revoke", revoke))
     app.add_handler(CommandHandler("status_user", status_user))
 
-    # Add Background Job safely
     if app.job_queue:
-        app.job_queue.run_repeating(
-            check_expiries_job,
-            interval=3600,  # Har 1 ghante me check karega
-            first=30,  # Start hone ke 30 sec baad pehli run
-        )
-    else:
-        logger.warning("JobQueue is not initialized.")
+        app.job_queue.run_repeating(check_expiries_job, interval=3600, first=30)
 
-    logger.info("Bot is starting...")
+    logger.info("Bot is polling Telegram...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
