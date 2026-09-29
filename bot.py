@@ -133,7 +133,7 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        target_id = int(context.args<sup data-citation="0">0</sup>)
+        target_id = int(context.args[0])
         days = int(context.args<sup data-citation="1">1</sup>)
     except ValueError:
         await update.message.reply_text("Invalid format. USER_ID and DAYS must be numbers.")
