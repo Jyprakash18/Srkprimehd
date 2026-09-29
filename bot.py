@@ -1,41 +1,45 @@
-import logging
 import asyncio
 from datetime import datetime, timedelta, timezone
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import logging
+from config import ADMIN_USER_IDS, BOT_TOKEN, LOG_CHANNEL_ID, PREMIUM_CHANNEL_ID
+import database
+from database import (
+    check_premium_status,
+    create_user_if_not_exists,
+    get_premium_channel_link,
+    get_user_by_id,
+    update_premium_status,
+)
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
     MessageHandler,
-    filters
-)
-from config import BOT_TOKEN, ADMIN_USER_IDS, LOG_CHANNEL_ID, PREMIUM_CHANNEL_ID
-from database import (
-    get_user_by_id,
-    create_user_if_not_exists,
-    update_premium_status,
-    check_premium_status,
-    get_premium_channel_link
+    filters,
 )
 
 # Setup Logging
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
 # --- Helper Functions ---
 
+
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_USER_IDS
 
-def format_date(dt: datetime) -> str:
+
+def format_date(dt: datetime | None) -> str:
     if not dt:
         return "N/A"
     return dt.strftime("%Y-%m-%d %H:%M UTC")
 
-def get_days_remaining(expiry_date: datetime) -> int:
+
+def get_days_remaining(expiry_date: datetime | None) -> int:
     if not expiry_date:
         return 0
     now = datetime.now(timezone.utc)
@@ -44,7 +48,9 @@ def get_days_remaining(expiry_date: datetime) -> int:
     delta = expiry_date - now
     return max(0, delta.days)
 
+
 # --- Command Handlers ---
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -55,16 +61,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Ensure user exists in DB
     db_user = create_user_if_not_exists(user_id, username)
-    
+
     if not db_user:
-        await update.message.reply_text("⚠️ Database error. Please try again later.")
+        await update.message.reply_text(
+            "⚠️ Database error. Please try again later."
+        )
         return
 
     # Check Premium Status
     is_active = check_premium_status(user_id)
-    
+
     if is_active:
-        expiry = db_user["premium"]["expiry_date"]
+        expiry = db_user.get("premium", {}).get("expiry_date")
         days_left = get_days_remaining(expiry)
         text = (
             "✅ <b>Premium Active</b>\n\n"
@@ -72,13 +80,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⏳ Remaining: {days_left} days\n\n"
             "Click the button below to join the premium channel."
         )
-        # Create Button
-        keyboard = [[
-            InlineKeyboardButton("Join Premium Channel", url=get_premium_channel_link())
-        ]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
+
+        channel_link = get_premium_channel_link()
+        keyboard = []
+        if channel_link:
+            keyboard.append(
+                [InlineKeyboardButton("Join Premium Channel", url=channel_link)]
+            )
+
+        reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+        await update.message.reply_text(
+            text, parse_mode="HTML", reply_markup=reply_markup
+        )
     else:
         text = (
             "👋 <b>Welcome!</b>\n\n"
@@ -87,19 +100,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(text, parse_mode="HTML")
 
+
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
-    
+
     db_user = get_user_by_id(user_id)
     if not db_user:
-        await update.message.reply_text("User not found. Please use /start first.")
+        await update.message.reply_text(
+            "User not found. Please use /start first."
+        )
         return
 
     is_active = check_premium_status(user_id)
     premium = db_user.get("premium", {})
     expiry = premium.get("expiry_date")
-    
+
     if is_active:
         days_left = get_days_remaining(expiry)
         text = (
@@ -108,19 +124,24 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📅 Expiry: {format_date(expiry)}\n"
             f"⏳ Remaining: {days_left} days"
         )
-        keyboard = [[
-            InlineKeyboardButton("Join Premium Channel", url=get_premium_channel_link())
-        ]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
-    else:
-        text = (
-            "📊 <b>Account Status</b>\n\n"
-            "❌ Premium: Inactive/Expired"
+        channel_link = get_premium_channel_link()
+        keyboard = []
+        if channel_link:
+            keyboard.append(
+                [InlineKeyboardButton("Join Premium Channel", url=channel_link)]
+            )
+
+        reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+        await update.message.reply_text(
+            text, parse_mode="HTML", reply_markup=reply_markup
         )
+    else:
+        text = "📊 <b>Account Status</b>\n\n❌ Premium: Inactive/Expired"
         await update.message.reply_text(text, parse_mode="HTML")
 
+
 # --- Admin Commands ---
+
 
 async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -136,48 +157,74 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = int(context.args[0])
         days = int(context.args[1])
     except ValueError:
-        await update.message.reply_text("Invalid format. USER_ID and DAYS must be numbers.")
+        await update.message.reply_text(
+            "Invalid format. USER_ID and DAYS must be numbers."
+        )
+        return
+
+    if days <= 0:
+        await update.message.reply_text("❌ DAYS must be greater than 0.")
         return
 
     # Ensure target user exists in DB
     target_user = create_user_if_not_exists(target_id, "Unknown")
     if not target_user:
-        await update.message.reply_text("⚠️ Could not create/find target user in DB.")
+        await update.message.reply_text(
+            "⚠️ Could not create/find target user in DB."
+        )
         return
 
     # Check if they already have active premium to extend it
     current_expiry = target_user.get("premium", {}).get("expiry_date")
     now = datetime.now(timezone.utc)
-    
-    # If current expiry is in the future, extend from there. Otherwise, start from now.
-    if current_expiry and current_expiry > now:
+
+    # Convert naive Mongo datetime to UTC BEFORE comparison
+    if current_expiry:
         if current_expiry.tzinfo is None:
             current_expiry = current_expiry.replace(tzinfo=timezone.utc)
-        new_expiry = current_expiry + timedelta(days=days)
+
+        if current_expiry > now:
+            new_expiry = current_expiry + timedelta(days=days)
+        else:
+            new_expiry = now + timedelta(days=days)
     else:
         new_expiry = now + timedelta(days=days)
 
     # Update DB
     result = update_premium_status(
-        target_id, 
-        is_premium=True, 
-        expiry_date=new_expiry, 
-        purchase_date=now, 
-        trial=False
+        target_id,
+        is_premium=True,
+        expiry_date=new_expiry,
+        purchase_date=now,
+        trial=False,
     )
 
-    if result and result.modified_count > 0:
+    if result:
         # Send message to user
         try:
+            channel_link = get_premium_channel_link()
+            buttons = []
+            if channel_link:
+                buttons.append(
+                    [
+                        InlineKeyboardButton(
+                            "Join Premium Channel", url=channel_link
+                        )
+                    ]
+                )
+
             await context.bot.send_message(
                 chat_id=target_id,
                 text=(
                     "✅ <b>Premium Activated!</b>\n\n"
                     f"📅 Expiry Date: {format_date(new_expiry)}\n"
                     f"⏳ Duration: {days} days\n\n"
-                    "Please join the premium channel to access files."
+                    "Please join the premium channel using the link below."
                 ),
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(buttons)
+                if buttons
+                else None,
             )
         except Exception as e:
             logger.warning(f"Could not send message to user {target_id}: {e}")
@@ -185,15 +232,24 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Log to Admin Channel
         log_text = (
             f"✅ <b>Payment Verified</b>\n"
-            f"User ID: {target_id}\n"
+            f"Admin: <code>{user.id}</code>\n"
+            f"User ID: <code>{target_id}</code>\n"
             f"Duration: {days} days\n"
             f"New Expiry: {format_date(new_expiry)}"
         )
-        await context.bot.send_message(chat_id=LOG_CHANNEL_ID, text=log_text, parse_mode="HTML")
-        
-        await update.message.reply_text(f"✅ Verified for ID {target_id}. Expiry: {format_date(new_expiry)}")
+        try:
+            await context.bot.send_message(
+                chat_id=LOG_CHANNEL_ID, text=log_text, parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Failed to post to LOG_CHANNEL: {e}")
+
+        await update.message.reply_text(
+            f"✅ Verified for ID {target_id}.\nExpiry: {format_date(new_expiry)}"
+        )
     else:
         await update.message.reply_text("⚠️ Failed to update user in database.")
+
 
 async def revoke(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -206,26 +262,28 @@ async def revoke(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        target_id = int(context.args<sup data-citation="0">0</sup>)
+        # Fixed syntax error
+        target_id = int(context.args[0])
     except ValueError:
         await update.message.reply_text("Invalid User ID.")
         return
 
     result = update_premium_status(
-        target_id, 
-        is_premium=False, 
-        expiry_date=None, 
-        trial=False
+        target_id, is_premium=False, expiry_date=None, trial=False
     )
 
-    if result and result.modified_count > 0:
+    if result:
         await update.message.reply_text(f"❌ Revoked premium for ID {target_id}.")
-        await context.bot.send_message(
-            chat_id=LOG_CHANNEL_ID,
-            text=f"❌ Premium Revoked for User ID: {target_id}"
-        )
+        try:
+            await context.bot.send_message(
+                chat_id=LOG_CHANNEL_ID,
+                text=f"❌ Premium Revoked for User ID: {target_id}",
+            )
+        except Exception as e:
+            logger.error(f"Failed to post revoke log: {e}")
     else:
         await update.message.reply_text("⚠️ User not found or no changes made.")
+
 
 async def status_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -238,7 +296,8 @@ async def status_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        target_id = int(context.args<sup data-citation="0">0</sup>)
+        # Fixed syntax error
+        target_id = int(context.args[0])
     except ValueError:
         await update.message.reply_text("Invalid User ID.")
         return
@@ -251,7 +310,7 @@ async def status_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     premium = target_user.get("premium", {})
     is_active = check_premium_status(target_id)
     expiry = premium.get("expiry_date")
-    
+
     text = (
         f"📊 <b>Status for ID: {target_id}</b>\n\n"
         f"Name: {target_user.get('name', 'Unknown')}\n"
@@ -261,35 +320,47 @@ async def status_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
+
 # --- Background Task for Expiry ---
 
+
 async def check_expiries_job(context: ContextTypes.DEFAULT_TYPE):
-    """
-    Runs periodically to check all users.
-    Note: For a small bot, iterating all users is fine. 
-    For very large bots, use a specific index or queue.
-    """
+    """Periodically checks all active users and marks expired ones as inactive."""
     logger.info("Running premium expiry check...")
-    # We fetch all users with is_premium: true
-    users = database.collection.find({"premium.is_premium": True})
-    
-    for user in users:
-        user_id = user.get("id")
-        expiry = user.get("premium", {}).get("expiry_date")
-        
-        if not expiry:
-            continue
-            
-        if expiry.tzinfo is None:
-            expiry = expiry.replace(tzinfo=timezone.utc)
-            
-        if datetime.now(timezone.utc) > expiry:
-            logger.info(f"Expiring premium for user {user_id}")
-            update_premium_status(user_id, is_premium=False)
-            
-    logger.info("Premium expiry check completed.")
+    try:
+        # database module explicitly referenced
+        users = database.collection.find({"premium.is_premium": True})
+        now = datetime.now(timezone.utc)
+
+        for user in users:
+            user_id = user.get("id")
+            expiry = user.get("premium", {}).get("expiry_date")
+
+            if not expiry:
+                continue
+
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+
+            if now > expiry:
+                logger.info(f"Expiring premium for user {user_id}")
+                update_premium_status(user_id, is_premium=False)
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text="⌛ <b>Your Premium Subscription has expired.</b>\nContact admin to renew.",
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+
+        logger.info("Premium expiry check completed.")
+    except Exception as e:
+        logger.error(f"Error in check_expiries_job: {e}")
+
 
 # --- Main ---
+
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -301,15 +372,21 @@ def main():
     app.add_handler(CommandHandler("revoke", revoke))
     app.add_handler(CommandHandler("status_user", status_user))
 
-    # Add Background Job
-    app.job_queue.run_repeating(
-        check_expiries_job,
-        interval=3600,  # Every hour
-        first=30        # Start after 30 seconds
-    )
+    # Add Background Job safely
+    if app.job_queue:
+        app.job_queue.run_repeating(
+            check_expiries_job,
+            interval=3600,  # Runs every hour
+            first=30,  # First run after 30 seconds
+        )
+    else:
+        logger.warning(
+            "JobQueue is not available. Install with: pip install 'python-telegram-bot[job-queue]'"
+        )
 
     logger.info("Bot is starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == "__main__":
     main()
