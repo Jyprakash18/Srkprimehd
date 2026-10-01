@@ -1,139 +1,220 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
-import os
-from config import COLLECTION_NAME, DB_NAME, MONGO_URI, PREMIUM_CHANNEL_ID
-from pymongo import MongoClient
+from typing import Any, Dict, List, Optional, Tuple
+import config
+from pymongo import MongoClient, ReturnDocument
+from pymongo.errors import PyMongoError
 
 logger = logging.getLogger(__name__)
 
-# Initialize Client
-client = MongoClient(MONGO_URI)
-db = client[DB_NAME]
-collection = db[COLLECTION_NAME]
+try:
+    client = MongoClient(config.MONGO_URI)
+    db = client[config.DB_NAME]
+    users_col = db[config.COLLECTION_NAME]
+    client.admin.command("ping")
+    logger.info("✅ Connected to MongoDB Atlas (cluster0.USERS)")
+except Exception as e:
+    logger.error(f"❌ MongoDB Connection Failed: {e}")
+    raise e
 
 
-def get_user_by_id(telegram_id: int):
-    """Fetches user document by Telegram ID."""
-    return collection.find_one({"id": telegram_id})
+def get_user(telegram_id: int) -> Optional[Dict[str, Any]]:
+    return users_col.find_one({"id": telegram_id})
 
 
-def create_user_if_not_exists(telegram_id: int, name: str = "Unknown"):
-    """Creates a new user document if it doesn't exist,
-
-    preserving the existing schema and updating last_seen.
-    """
-    existing = get_user_by_id(telegram_id)
-    now_utc = datetime.now(timezone.utc)
-
-    if existing:
-        collection.update_one(
-            {"id": telegram_id}, {"$set": {"user_data.last_seen": now_utc}}
-        )
-        return existing
-
-    new_user = {
-        "id": telegram_id,
-        "name": name,
-        "premium": {
-            "is_premium": False,
-            "expiry_date": None,
-            "purchase_date": None,
-            "trial": False,
-        },
-        "user_data": {
-            "is_verified": False,
-            "is_subscribed": False,
-            "join_date": now_utc,
-            "last_seen": now_utc,
-        },
-        "files": {"todays_files": 0, "lifetime_files": 0},
-        "refer": {"referral_points": 0, "invited_by": None},
-        "ban_status": {"is_banned": False, "ban_reason": ""},
-    }
-
+def get_or_create_user(
+    telegram_id: int, name: str = "User"
+) -> Optional[Dict[str, Any]]:
+    now = datetime.now(timezone.utc)
     try:
-        collection.insert_one(new_user)
-        logger.info(f"Created new user document for ID: {telegram_id}")
-        return collection.find_one({"id": telegram_id})
-    except Exception as e:
-        logger.error(f"Error creating user: {e}")
+        user = users_col.find_one_and_update(
+            {"id": telegram_id},
+            {
+                "$setOnInsert": {
+                    "id": telegram_id,
+                    "name": name,
+                    "premium": {
+                        "is_premium": False,
+                        "expiry_date": None,
+                        "purchase_date": None,
+                        "trial": False,
+                    },
+                    "user_data": {
+                        "is_verified": False,
+                        "is_subscribed": False,
+                        "join_date": now,
+                        "last_seen": now,
+                    },
+                    "files": {"todays_files": 0, "lifetime_files": 0},
+                    "refer": {"referral_points": 0, "invited_by": None},
+                    "ban_status": {"is_banned": False, "ban_reason": ""},
+                },
+                "$set": {"user_data.last_seen": now},
+            },
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+        return user
+    except PyMongoError as e:
+        logger.error(f"Error in get_or_create_user: {e}")
         return None
 
 
-def update_premium_status(
-    telegram_id: int,
-    is_premium: bool,
-    expiry_date: datetime = None,
-    purchase_date: datetime = None,
-    trial: bool = False,
-):
-    """Updates ONLY the premium fields.
-
-    Properly handles clearing the expiry date when revoking.
-    """
-    update_fields = {"premium.is_premium": is_premium, "premium.trial": trial}
-
-    # Jab premium active ho raha ho YA revoke ho raha ho (None set karna ho)
-    if expiry_date is not None or not is_premium:
-        update_fields["premium.expiry_date"] = expiry_date
-
-    if purchase_date is not None:
-        update_fields["premium.purchase_date"] = purchase_date
-
-    try:
-        result = collection.update_one(
-            {"id": telegram_id}, {"$set": update_fields}
-        )
-        if result.matched_count == 0:
-            logger.warning(
-                f"User ID {telegram_id} not found for premium update."
-            )
-        return result
-    except Exception as e:
-        logger.error(f"Error updating premium status: {e}")
-        return None
-
-
-def check_premium_status(telegram_id: int) -> bool:
-    """Checks if a user's premium is active and unexpired."""
-    user = get_user_by_id(telegram_id)
+def is_premium_active(telegram_id: int) -> Tuple[bool, Optional[datetime]]:
+    user = get_user(telegram_id)
     if not user:
-        return False
+        return False, None
 
     premium = user.get("premium", {})
-    if not premium.get("is_premium"):
-        return False
+    if not premium.get("is_premium", False):
+        return False, None
 
     expiry = premium.get("expiry_date")
     if not expiry:
-        return False
+        return False, None
 
     if expiry.tzinfo is None:
         expiry = expiry.replace(tzinfo=timezone.utc)
 
-    if datetime.now(timezone.utc) > expiry:
-        # Auto-expire if time has passed
-        update_premium_status(telegram_id, is_premium=False)
-        return False
-
-    return True
+    now = datetime.now(timezone.utc)
+    if expiry > now:
+        return True, expiry
+    return False, expiry
 
 
-# Alias so both function names work across files
-check_premium_expiry = check_premium_status
+def add_or_extend_premium(
+    telegram_id: int, days: int, name: str = "User"
+) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    user = get_or_create_user(telegram_id, name)
+
+    premium = user.get("premium", {}) if user else {}
+    is_active = premium.get("is_premium", False)
+    current_expiry = premium.get("expiry_date")
+
+    if is_active and current_expiry:
+        if current_expiry.tzinfo is None:
+            current_expiry = current_expiry.replace(tzinfo=timezone.utc)
+
+        if current_expiry > now:
+            new_expiry = current_expiry + timedelta(days=days)
+            extended = True
+        else:
+            new_expiry = now + timedelta(days=days)
+            extended = False
+    else:
+        new_expiry = now + timedelta(days=days)
+        extended = False
+
+    update_fields = {
+        "premium.is_premium": True,
+        "premium.purchase_date": now,
+        "premium.expiry_date": new_expiry,
+        "premium.trial": False,
+    }
+
+    updated_user = users_col.find_one_and_update(
+        {"id": telegram_id},
+        {"$set": update_fields},
+        return_document=ReturnDocument.AFTER,
+    )
+
+    return {
+        "user": updated_user,
+        "new_expiry": new_expiry,
+        "extended": extended,
+    }
 
 
-def get_premium_channel_link() -> str:
-    """Returns valid Telegram channel link."""
-    # Check if a custom invite link was provided in environment
-    custom_link = os.getenv("PREMIUM_CHANNEL_LINK")
-    if custom_link:
-        return custom_link.strip()
+def revoke_premium(telegram_id: int) -> bool:
+    res = users_col.update_one(
+        {"id": telegram_id},
+        {
+            "$set": {
+                "premium.is_premium": False,
+                "premium.expiry_date": None,
+                "premium.trial": False,
+            }
+        },
+    )
+    return res.modified_count > 0
 
-    ch_id = str(PREMIUM_CHANNEL_ID).strip()
-    if ch_id.startswith("-100"):
-        return f"https://t.me/c/{ch_id[4:]}"
-    if ch_id.startswith("@"):
-        return f"https://t.me/{ch_id[1:]}"
 
-    return f"https://t.me/{ch_id}"
+def get_expired_active_users() -> List[Dict[str, Any]]:
+    now = datetime.now(timezone.utc)
+    return list(
+        users_col.find(
+            {"premium.is_premium": True, "premium.expiry_date": {"$lte": now}}
+        )
+    )
+
+
+def mark_user_expired(telegram_id: int):
+    users_col.update_one(
+        {"id": telegram_id},
+        {"$set": {"premium.is_premium": False, "premium.expiry_date": None}},
+    )
+
+
+def count_all_users() -> int:
+    return users_col.count_documents({})
+
+
+def count_premium_users() -> int:
+    now = datetime.now(timezone.utc)
+    return users_col.count_documents(
+        {"premium.is_premium": True, "premium.expiry_date": {"$gt": now}}
+    )
+
+
+def count_expired_users() -> int:
+    now = datetime.now(timezone.utc)
+    return users_col.count_documents(
+        {
+            "$or": [
+                {
+                    "premium.is_premium": True,
+                    "premium.expiry_date": {"$lte": now},
+                },
+                {
+                    "premium.is_premium": False,
+                    "premium.purchase_date": {"$ne": None},
+                },
+            ]
+        }
+    )
+
+
+def get_paginated_premium_users(page: int, per_page: int = 5) -> List[Dict]:
+    now = datetime.now(timezone.utc)
+    skip = (page - 1) * per_page
+    return list(
+        users_col.find(
+            {"premium.is_premium": True, "premium.expiry_date": {"$gt": now}}
+        )
+        .skip(skip)
+        .limit(per_page)
+    )
+
+
+def get_paginated_expired_users(page: int, per_page: int = 5) -> List[Dict]:
+    now = datetime.now(timezone.utc)
+    skip = (page - 1) * per_page
+    return list(
+        users_col.find(
+            {
+                "$or": [
+                    {
+                        "premium.is_premium": True,
+                        "premium.expiry_date": {"$lte": now},
+                    },
+                    {
+                        "premium.is_premium": False,
+                        "premium.purchase_date": {"$ne": None},
+                    },
+                ]
+            }
+        )
+        .skip(skip)
+        .limit(per_page)
+    )
