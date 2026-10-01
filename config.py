@@ -2,50 +2,38 @@ import os
 import sys
 from dotenv import load_dotenv
 
-# Load .env file (local testing ke liye)
 load_dotenv()
 
-# Read variables directly from environment
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-MONGO_URI = os.getenv("MONGO_URI")
-LOG_CHANNEL_ID_RAW = os.getenv("LOG_CHANNEL_ID")
-PREMIUM_CHANNEL_ID_RAW = os.getenv("PREMIUM_CHANNEL_ID")
-ADMIN_USER_IDS_RAW = os.getenv("ADMIN_USER_IDS", "")
 
-# MongoDB Config
+def get_env_or_exit(key: str) -> str:
+    val = os.getenv(key)
+    if not val:
+        print(f"❌ CRITICAL ERROR: Environment variable '{key}' is missing!")
+        sys.exit(1)
+    return val.strip()
+
+
+BOT_TOKEN = get_env_or_exit("BOT_TOKEN")
+MONGO_URI = get_env_or_exit("MONGO_URI")
+
+try:
+    PREMIUM_CHANNEL_ID = int(get_env_or_exit("PREMIUM_CHANNEL_ID"))
+    PREMIUM_GROUP_ID = int(get_env_or_exit("PREMIUM_GROUP_ID"))
+except ValueError:
+    print(
+        "❌ CRITICAL ERROR: PREMIUM_CHANNEL_ID aur PREMIUM_GROUP_ID numbers hone chahiye!"
+    )
+    sys.exit(1)
+
+raw_admins = os.getenv("ADMIN_USER_IDS", "")
+ADMIN_USER_IDS = set()
+for aid in raw_admins.split(","):
+    aid = aid.strip()
+    if aid.isdigit():
+        ADMIN_USER_IDS.add(int(aid))
+
+SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "telegram").lstrip("@")
+PORT = int(os.environ.get("PORT", 8080))
+
 DB_NAME = "cluster0"
 COLLECTION_NAME = "USERS"
-
-# Check kaun-kaun se variables gayab hain
-missing_vars = []
-if not BOT_TOKEN:
-    missing_vars.append("BOT_TOKEN")
-if not MONGO_URI:
-    missing_vars.append("MONGO_URI")
-if not LOG_CHANNEL_ID_RAW:
-    missing_vars.append("LOG_CHANNEL_ID")
-if not PREMIUM_CHANNEL_ID_RAW:
-    missing_vars.append("PREMIUM_CHANNEL_ID")
-
-if missing_vars:
-    print(f"❌ CRITICAL ERROR: Render me ye keys nahi mili: {missing_vars}")
-    print(
-        "👉 Render Dashboard -> Environment me jaakar exact spelling check karein."
-    )
-    raise ValueError(f"Missing required environment variables: {missing_vars}")
-
-# Convert IDs to Integer safely
-try:
-    LOG_CHANNEL_ID = int(LOG_CHANNEL_ID_RAW.strip())
-    PREMIUM_CHANNEL_ID = int(PREMIUM_CHANNEL_ID_RAW.strip())
-except ValueError:
-    raise ValueError(
-        "LOG_CHANNEL_ID and PREMIUM_CHANNEL_ID must be numbers (e.g. -1001234567890)"
-    )
-
-# Parse Admin IDs safely
-ADMIN_USER_IDS = []
-for x in ADMIN_USER_IDS_RAW.split(","):
-    x = x.strip()
-    if x.isdigit():
-        ADMIN_USER_IDS.append(int(x))
