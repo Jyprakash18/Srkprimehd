@@ -797,7 +797,8 @@ def main():
         CommandHandler(["revoke", "removepremium"], remove_premium_cmd)
     )
     app.add_handler(CommandHandler(["status_user", "user"], user_info_cmd))
-
+    app.add_handler(CommandHandler("testlog", test_log_cmd))
+   
     # Background Tasks
     if app.job_queue:
         # Check for Bot 1 newly activated users every 30 seconds to auto-send
