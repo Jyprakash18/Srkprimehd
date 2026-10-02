@@ -603,6 +603,35 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="HTML")
 
 
+# Yeh function bot.py me Admin commands ke paas add karein:
+async def test_log_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = update.effective_user
+    if not is_admin(admin.id):
+        return
+
+    await update.message.reply_text(
+        f"⏳ Log channel test kar raha hu...\nTarget ID: <code>{LOG_CHANNEL_ID}</code>",
+        parse_mode="HTML",
+    )
+
+    try:
+        sent = await context.bot.send_message(
+            chat_id=LOG_CHANNEL_ID,
+            text=f"✅ <b>Test Successful!</b>\nLog channel is properly connected.\nAdmin: <code>{admin.id}</code>",
+            parse_mode="HTML",
+        )
+        await update.message.reply_text(
+            f"🎉 <b>Success!</b> Log channel me message bhej diya gaya hai (Msg ID: {sent.message_id}).",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.error(f"Log Channel send failed: {e}")
+        await update.message.reply_text(
+            f"❌ <b>Failed!</b> Telegram ne ye error diya:\n<code>{e}</code>\n\n"
+            "👉 <b>Solution:</b> Check karein ki Bot Log Channel me Admin hai ya nahi aur 'Post Messages' on hai ya nahi.",
+            parse_mode="HTML",
+        )
+
 # --- Automatic Notification Background Job (Bot 1 -> Bot 2 Sync) ---
 
 
