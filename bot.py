@@ -308,6 +308,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = (
             f"👋 Welcome <b>{user.first_name}</b>!\n\n"
             f"❌ <b>Your Premium Subscription is inactive.</b>\n\n"
+            f"🔒 <b> Your Premium benefits are currently unavailable.:</b>\n"
+            f"🚀 <b> Upgrade now to unlock all Premium features.:</b>\n"
+            f"👇 <b> Tap Upgrade to continue.:</b>\n"
             f"Use the <b>Menu (bottom left)</b> to view available plans and subscribe."
         )
         await update.message.reply_text(
@@ -321,9 +324,9 @@ async def plans_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plans_text = (
         "💎 <b>SRK Premium Subscription Plans</b>\n\n"
         "• <b>30 Days:</b> ₹99\n"
-        "• <b>60 Days:</b> ₹180\n"
-        "• <b>90 Days:</b> ₹250\n"
-        "• <b>365 Days:</b> ₹899\n\n"
+        "• <b>90 Days:</b> ₹149\n"
+        "• <b>180 Days:</b> ₹269\n"
+        "• <b>365 Days:</b> ₹499\n\n"
         "💳 <b>How to Purchase:</b>\n"
         f"1. Send payment to Admin.\n"
         f"2. Send receipt with your User ID (<code>{user.id}</code>) to support.\n"
