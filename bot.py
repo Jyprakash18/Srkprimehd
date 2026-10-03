@@ -755,7 +755,7 @@ async def setup_bot_commands(application):
         BotCommand("start", "Show premium plans"),
         BotCommand("myplan", "View current plan"),
         BotCommand("renew", "Renew premium"),
-        BotCommand("Plan", "Premium Plan Details"),
+        BotCommand("plan", "Premium Plan Details"),
         BotCommand("help", "Get support"),
     ]
     await application.bot.set_my_commands(commands)
