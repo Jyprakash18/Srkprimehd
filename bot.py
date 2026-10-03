@@ -376,7 +376,7 @@ async def renew_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔄 <b>Renew Premium Subscription</b>\n\n"
         "If you renew while your subscription is still active, "
         "<b>your new days will be added on top of your current expiry date!</b>\n\n"
-        f"Contact @{SRKSupports} with your User ID (<code>{user.id}</code>) to renew."
+        f"Contact @SRKSupports with your User ID (<code>{user.id}</code>) to renew."
     )
     btn = (
         InlineKeyboardMarkup(
@@ -396,7 +396,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"🆘 <b>Customer Support</b>\n\n"
         f"For any queries, issues, or payments, contact our administrator:\n"
-        f"👉 @{SRKSupports}\n\n"
+        f"👉 @SRKSupports\n\n"
         f"Your Telegram User ID: <code>{user.id}</code>"
     )
     await update.message.reply_text(text, parse_mode="HTML")
