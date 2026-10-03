@@ -319,7 +319,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def plans_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Corresponds to Side Menu: 'Show premium plans' (/plans or /start)"""
+    """Corresponds to Side Menu: 'Show premium plans' (/plan, /plans)"""
     user = update.effective_user
     plans_text = (
         "💎 <b>SRK Premium Subscription Plans</b>\n\n"
@@ -342,6 +342,7 @@ async def plans_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         plans_text, parse_mode="HTML", reply_markup=btn
     )
+
 
 
 async def myplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
