@@ -334,7 +334,7 @@ async def plans_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     btn = (
         InlineKeyboardMarkup(
-            [[InlineKeyboardButton("Upgrade ↗", url=UPGRADE_LINK)]]
+            [[InlineKeyboardButton("Buy Now ➡️", url=UPGRADE_LINK)]]
         )
         if UPGRADE_LINK
         else None
@@ -381,7 +381,7 @@ async def renew_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     btn = (
         InlineKeyboardMarkup(
-            [[InlineKeyboardButton("Upgrade ↗", url=UPGRADE_LINK)]]
+            [[InlineKeyboardButton("Buy Now 💎", url=UPGRADE_LINK)]]
         )
         if UPGRADE_LINK
         else None
@@ -757,6 +757,7 @@ async def setup_bot_commands(application):
         BotCommand("myplan", "View current plan"),
         BotCommand("renew", "Renew premium"), 
         BotCommand("help", "Get support"),
+        BotCommand("plans", "Buy the premium plan"),
     ]
     await application.bot.set_my_commands(commands)
     logger.info("✅ Side Menu (/menu) commands registered successfully!")
