@@ -174,6 +174,7 @@ def db_add_or_extend_premium(
         "premium.expiry_date": new_expiry,
         "premium.trial": False,
         "premium.bot2_notified": False,  # Auto-send notifier trigger
+        "premium.last_reminder_day": None,  # Reset reminder tracker
     }
     col.update_one({"id": user_id}, {"$set": update_fields})
     return {"new_expiry": new_expiry, "extended": extended}
@@ -189,6 +190,7 @@ def db_revoke_premium(user_id: int):
                 "premium.expiry_date": None,
                 "premium.trial": False,
                 "premium.bot2_notified": False,
+                "premium.last_reminder_day": None,
             }
         },
     )
@@ -344,7 +346,6 @@ async def plans_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-
 async def myplan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Corresponds to Side Menu: 'View current plan' (/myplan)"""
     user = update.effective_user
@@ -403,6 +404,32 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="HTML")
 
 
+# --- Reminder Callback Handler ---
+
+
+async def reminder_callback_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
+    """Handles the 'View My Plan' button on expiry reminder alerts."""
+    query = update.callback_query
+    await query.answer()
+    user = query.from_user
+
+    if query.data == "remind_view_plan":
+        is_active, expiry = db_is_premium_active(user.id)
+        if is_active and expiry:
+            days_left = max(0, (expiry - datetime.now(timezone.utc)).days)
+            text = (
+                f"📋 <b>Your Current Plan</b>\n\n"
+                f"• <b>Status:</b> Active ✅\n"
+                f"• <b>Expiry Date:</b> <code>{format_date(expiry)}</code>\n"
+                f"• <b>Time Left:</b> {days_left} days"
+            )
+        else:
+            text = "📋 <b>Your Subscription has expired!</b>"
+        await query.message.reply_text(text, parse_mode="HTML")
+
+
 # --- Automatic Join Request System ---
 
 
@@ -433,6 +460,21 @@ async def handle_chat_join_request(
                 ),
                 parse_mode="HTML",
             )
+            # Log Channel notification
+            if LOG_CHANNEL_ID:
+                try:
+                    await context.bot.send_message(
+                        chat_id=LOG_CHANNEL_ID,
+                        text=(
+                            f"🟢 <b>[JOIN APPROVED]</b>\n"
+                            f"👤 User: {user.first_name} (<code>{user.id}</code>)\n"
+                            f"📢 Chat: <b>{chat.title}</b>\n"
+                            f"📅 Expiry: <code>{exp_str}</code>"
+                        ),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"Error approving join request: {e}")
     else:
@@ -450,6 +492,20 @@ async def handle_chat_join_request(
                 ),
                 parse_mode="HTML",
             )
+            # Log Channel notification
+            if LOG_CHANNEL_ID:
+                try:
+                    await context.bot.send_message(
+                        chat_id=LOG_CHANNEL_ID,
+                        text=(
+                            f"🔴 <b>[JOIN DECLINED - NO PREMIUM]</b>\n"
+                            f"👤 User: {user.first_name} (<code>{user.id}</code>)\n"
+                            f"📢 Chat: <b>{chat.title}</b>"
+                        ),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"Error notifying declined user: {e}")
 
@@ -567,6 +623,16 @@ async def remove_premium_cmd(
     except Exception:
         pass
 
+    if LOG_CHANNEL_ID:
+        try:
+            await context.bot.send_message(
+                chat_id=LOG_CHANNEL_ID,
+                text=f"❌ <b>[LOG] Premium Revoked</b> for User ID: <code>{target_id}</code>",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
     await update.message.reply_text(
         f"✅ User <code>{target_id}</code> premium revoked.", parse_mode="HTML"
     )
@@ -607,7 +673,6 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="HTML")
 
 
-# Yeh function bot.py me Admin commands ke paas add karein:
 async def test_log_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = update.effective_user
     if not is_admin(admin.id):
@@ -636,6 +701,7 @@ async def test_log_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
         )
 
+
 # --- Automatic Notification Background Job (Bot 1 -> Bot 2 Sync) ---
 
 
@@ -663,6 +729,7 @@ async def auto_notify_new_premium_job(context: ContextTypes.DEFAULT_TYPE):
 
     for u in unnotified_users:
         uid = u.get("id")
+        name = u.get("name", "User")
         expiry = u.get("premium", {}).get("expiry_date")
         if not uid or not expiry:
             continue
@@ -687,6 +754,22 @@ async def auto_notify_new_premium_job(context: ContextTypes.DEFAULT_TYPE):
             logger.info(
                 f"✅ Auto-sent premium notification to User {uid} successfully!"
             )
+
+            # Log Channel Alert
+            if LOG_CHANNEL_ID:
+                try:
+                    await context.bot.send_message(
+                        chat_id=LOG_CHANNEL_ID,
+                        text=(
+                            f"⭐ <b>[NEW PREMIUM DETECTED]</b>\n"
+                            f"👤 User: {name} (<code>{uid}</code>)\n"
+                            f"📅 Expiry: <code>{exp_str}</code>\n"
+                            f"📬 Direct Message: Sent Successfully"
+                        ),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
         except (Forbidden, BadRequest) as e:
             # User hasn't started the bot or blocked it
             col.update_one(
@@ -697,6 +780,116 @@ async def auto_notify_new_premium_job(context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception as e:
             logger.error(f"Unexpected error auto-notifying {uid}: {e}")
+
+
+# --- Background Expiry Reminder Task ---
+
+
+async def send_expiry_reminders_job(context: ContextTypes.DEFAULT_TYPE):
+    """Automatically scans MongoDB for users expiring in 3, 2, or 1 days
+
+    and delivers personalized expiry reminder alerts.
+    """
+    col = get_db_collection()
+    now = datetime.now(timezone.utc)
+
+    active_users = list(
+        col.find(
+            {"premium.is_premium": True, "premium.expiry_date": {"$gt": now}}
+        )
+    )
+
+    for user in active_users:
+        uid = user.get("id")
+        name = user.get("name", "User")
+        expiry = user.get("premium", {}).get("expiry_date")
+        last_reminded = user.get("premium", {}).get("last_reminder_day")
+
+        if not uid or not expiry:
+            continue
+
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+
+        diff = expiry - now
+        days_left = diff.days
+        hours_left = int(diff.total_seconds() // 3600)
+
+        # Triggers when exactly 1, 2, or 3 days are left
+        if days_left in [1, 2, 3]:
+            if last_reminded == days_left:
+                continue
+
+            msg = (
+                f"👋 Hey — <b>{name}</b>, Your Premium Access will expire in <b>{days_left} days</b>! ⌛\n\n"
+                f"🚀 <b>Renew now to get:</b>\n"
+                f"• ⚡ Lightning-fast Speed\n"
+                f"• 🎬 Exclusive Media collections\n"
+                f"• 🔒 Ad-free experience\n"
+                f"• 🎁 Premium-only features\n"
+                f"• 💼 Priority Access & Support\n\n"
+                f"⏰ <b>Only {hours_left} hours left!</b>\n\n"
+                f"💡 <b>Note:</b> If expired, All the features will stop working!\n\n"
+                f"✨ <b>Quick Commands:</b>\n"
+                f"➡️ /plans — View Renewal Options\n"
+                f"➡️ /myplan — Check Your Status"
+            )
+
+            keyboard = [
+                [
+                    InlineKeyboardButton(
+                        "💎 Renew Premium",
+                        url=UPGRADE_LINK
+                        if UPGRADE_LINK
+                        else f"https://t.me/{SUPPORT_USERNAME}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "📊 View My Plan", callback_data="remind_view_plan"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "💬 Contact Support",
+                        url=f"https://t.me/{SUPPORT_USERNAME}",
+                    )
+                ],
+            ]
+
+            try:
+                await context.bot.send_message(
+                    chat_id=uid,
+                    text=msg,
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                )
+                col.update_one(
+                    {"id": uid},
+                    {"$set": {"premium.last_reminder_day": days_left}},
+                )
+                logger.info(
+                    f"🔔 Expiry reminder sent to {uid} ({days_left} days left)"
+                )
+
+                if LOG_CHANNEL_ID:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=LOG_CHANNEL_ID,
+                            text=(
+                                f"🔔 <b>[EXPIRY REMINDER SENT]</b>\n"
+                                f"👤 User: {name} (<code>{uid}</code>)\n"
+                                f"⏳ Remaining: <b>{days_left} days</b> ({hours_left}h)\n"
+                                f"📅 Expiry: <code>{format_date(expiry)}</code>"
+                            ),
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning(
+                    f"Could not send reminder to {uid} (Bot blocked/stopped): {e}"
+                )
 
 
 # --- Background Auto-Expiry Job ---
@@ -727,6 +920,7 @@ async def check_expiries_job(context: ContextTypes.DEFAULT_TYPE):
                     "premium.is_premium": False,
                     "premium.expiry_date": None,
                     "premium.bot2_notified": False,
+                    "premium.last_reminder_day": None,
                 }
             },
         )
@@ -746,21 +940,34 @@ async def check_expiries_job(context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
+        if LOG_CHANNEL_ID:
+            try:
+                await context.bot.send_message(
+                    chat_id=LOG_CHANNEL_ID,
+                    text=f"⌛ <b>[EXPIRED]</b> Premium expired for User: <code>{uid}</code>",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
 
 # --- Side Menu Setup On Bot Startup ---
 
 
 async def setup_bot_commands(application):
-    """Sets the native Side Menu commands exactly matching Photo 1."""
-    commands = [
-        BotCommand("start", "Show premium plans"),
-        BotCommand("myplan", "View current plan"),
-        BotCommand("renew", "Renew premium"), 
-        BotCommand("help", "Get support"),
-        BotCommand("plans", "Buy the premium plan"),
-    ]
-    await application.bot.set_my_commands(commands)
-    logger.info("✅ Side Menu (/menu) commands registered successfully!")
+    """Sets the native Side Menu commands safely."""
+    try:
+        commands = [
+            BotCommand("start", "Show premium plans"),
+            BotCommand("myplan", "View current plan"),
+            BotCommand("renew", "Renew premium"),
+            BotCommand("help", "Get support"),
+            BotCommand("plans", "Buy the premium plan"),
+        ]
+        await application.bot.set_my_commands(commands)
+        logger.info("✅ Side Menu (/menu) commands registered successfully!")
+    except Exception as e:
+        logger.error(f"Error registering menu commands: {e}")
 
 
 # --- Main Entrypoint ---
@@ -788,10 +995,17 @@ def main():
 
     # Core User Handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler(["plans", "show_plans"], plans_command))
+    app.add_handler(CommandHandler(["plan", "plans", "show_plans"], plans_command))
     app.add_handler(CommandHandler(["myplan", "status"], myplan_command))
     app.add_handler(CommandHandler("renew", renew_command))
     app.add_handler(CommandHandler("help", help_command))
+
+    # Reminder Callback Handler
+    app.add_handler(
+        CallbackQueryHandler(
+            reminder_callback_handler, pattern="^remind_view_plan$"
+        )
+    )
 
     # Join Request Handler
     app.add_handler(ChatJoinRequestHandler(handle_chat_join_request))
@@ -803,12 +1017,16 @@ def main():
     )
     app.add_handler(CommandHandler(["status_user", "user"], user_info_cmd))
     app.add_handler(CommandHandler("testlog", test_log_cmd))
-   
+
     # Background Tasks
     if app.job_queue:
         # Check for Bot 1 newly activated users every 30 seconds to auto-send
         app.job_queue.run_repeating(
             auto_notify_new_premium_job, interval=30, first=5
+        )
+        # Check for expiring users (3, 2, 1 days left) every 1 hour
+        app.job_queue.run_repeating(
+            send_expiry_reminders_job, interval=3600, first=40
         )
         # Check expired users every 10 minutes
         app.job_queue.run_repeating(check_expiries_job, interval=600, first=20)
@@ -819,4 +1037,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
