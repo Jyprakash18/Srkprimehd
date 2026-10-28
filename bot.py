@@ -701,6 +701,122 @@ async def test_log_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
         )
 
+# --- Broadcast Commands ---
+
+async def broadcast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sends a message or forwarded post to ALL users in database."""
+    admin = update.effective_user
+    if not is_admin(admin.id):
+        return
+
+    target_msg = update.message.reply_to_message
+    broadcast_text = " ".join(context.args) if context.args else None
+
+    if not target_msg and not broadcast_text:
+        await update.message.reply_text(
+            "⚠️ <b>Usage:</b>\n"
+            "1. Kisi message ko reply karke <code>/broadcast</code> bhejein.\n"
+            "YA\n"
+            "2. <code>/broadcast Aapka message...</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    col = get_db_collection()
+    users = list(col.find({}, {"id": 1}))
+    total_users = len(users)
+
+    status_msg = await update.message.reply_text(
+        f"⏳ Broadcast shuru ho raha hai... (Total Users: {total_users})",
+        parse_mode="HTML"
+    )
+
+    success = 0
+    failed = 0
+
+    for u in users:
+        uid = u.get("id")
+        if not uid:
+            continue
+        try:
+            if target_msg:
+                await context.bot.copy_message(
+                    chat_id=uid,
+                    from_chat_id=target_msg.chat_id,
+                    message_id=target_msg.message_id
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=uid,
+                    text=broadcast_text,
+                    parse_mode="HTML"
+                )
+            success += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            failed += 1
+
+    await status_msg.edit_text(
+        f"📢 <b>Broadcast Complete!</b>\n\n"
+        f"👥 Total: <code>{total_users}</code>\n"
+        f"✅ Sent: <code>{success}</code>\n"
+        f"❌ Failed: <code>{failed}</code>",
+        parse_mode="HTML"
+    )
+
+
+async def ucast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sends a message to a SINGLE specific user."""
+    admin = update.effective_user
+    if not is_admin(admin.id):
+        return
+
+    target_msg = update.message.reply_to_message
+
+    if target_msg and len(context.args) >= 1:
+        try:
+            target_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("❌ User ID number honi chahiye.")
+            return
+
+        try:
+            await context.bot.copy_message(
+                chat_id=target_id,
+                from_chat_id=target_msg.chat_id,
+                message_id=target_msg.message_id
+            )
+            await update.message.reply_text(f"✅ Message sent to <code>{target_id}</code>", parse_mode="HTML")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Failed to send: <code>{e}</code>", parse_mode="HTML")
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "⚠️ <b>Usage:</b>\n"
+            "<code>/ucast USER_ID Your message...</code>\n"
+            "YA kisi message ko reply karke:\n"
+            "<code>/ucast USER_ID</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        target_id = int(context.args[0])
+        msg_text = " ".join(context.args[1:])
+    except ValueError:
+        await update.message.reply_text("❌ User ID number honi chahiye.")
+        return
+
+    try:
+        await context.bot.send_message(
+            chat_id=target_id,
+            text=msg_text,
+            parse_mode="HTML"
+        )
+        await update.message.reply_text(f"✅ Message sent to <code>{target_id}</code>", parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to send: <code>{e}</code>", parse_mode="HTML")
 
 # --- Automatic Notification Background Job (Bot 1 -> Bot 2 Sync) ---
 
