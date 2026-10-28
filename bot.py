@@ -968,7 +968,7 @@ async def send_expiry_reminders_job(context: ContextTypes.DEFAULT_TYPE):
                 [
                     InlineKeyboardButton(
                         "💬 Contact Support",
-                        url=f"https://t.me/{SUPPORT_USERNAME}",
+                        url=f"https://t.me/SRKSupports",
                     )
                 ],
             ]
@@ -1133,6 +1133,8 @@ def main():
     )
     app.add_handler(CommandHandler(["status_user", "user"], user_info_cmd))
     app.add_handler(CommandHandler("testlog", test_log_cmd))
+    app.add_handler(CommandHandler("broadcast", broadcast_cmd))
+    app.add_handler(CommandHandler("ucast", ucast_cmd))
 
     # Background Tasks
     if app.job_queue:
